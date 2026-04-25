@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 
+@file:OptIn(ExperimentalGlideComposeApi::class)
+
 package com.android.axion.axthemestore.ui.components
 
+import android.content.Context
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
@@ -49,6 +52,9 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import com.android.axion.axthemestore.R
+import com.android.axion.axthemestore.data.ThumbnailPreloader
+import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
+import com.bumptech.glide.integration.compose.GlideImage
 import kotlin.math.min
 
 private data class BatteryShapeSpec(
@@ -107,6 +113,13 @@ fun BatteryStylePreview(packageName: String, modifier: Modifier = Modifier) {
     val baseAccentPath: Path? = remember(spec) {
         spec.accentPathData?.let { PathParser.createPathFromPathData(it) }
     }
+    val fillPaint = remember { Paint().apply { style = Paint.Style.FILL; isAntiAlias = true } }
+    val strokePaint = remember { Paint().apply { style = Paint.Style.STROKE; isAntiAlias = true } }
+    val accentPaint = remember { Paint().apply { style = Paint.Style.FILL; isAntiAlias = true } }
+    val matrix = remember { Matrix() }
+    val outlinePath = remember { Path() }
+    val fillPath = remember { Path() }
+    val accentPath = remember { Path() }
 
     Box(
         modifier = modifier.drawWithContent {
@@ -115,33 +128,23 @@ fun BatteryStylePreview(packageName: String, modifier: Modifier = Modifier) {
             val scale = min(size.width / vw, size.height / vh) * 0.75f
             val dx = (size.width - vw * scale) / 2f
             val dy = (size.height - vh * scale) / 2f
-            val matrix = Matrix().apply { setScale(scale, scale); postTranslate(dx, dy) }
+            matrix.reset()
+            matrix.setScale(scale, scale)
+            matrix.postTranslate(dx, dy)
 
-            val outlinePath = Path(basePath).apply { transform(matrix) }
-            val fillPath: Path? = baseFillPath?.let { Path(it).apply { transform(matrix) } }
-            val accentPath: Path? = baseAccentPath?.let { Path(it).apply { transform(matrix) } }
+            outlinePath.set(basePath); outlinePath.transform(matrix)
+            baseFillPath?.let { fillPath.set(it); fillPath.transform(matrix) }
+            baseAccentPath?.let { accentPath.set(it); accentPath.transform(matrix) }
+
+            strokePaint.color = strokeColorArgb
+            strokePaint.strokeWidth = scale * 0.7f
+            fillPaint.color = fillColorArgb
+            accentPaint.color = accentColorArgb
 
             drawIntoCanvas { canvas ->
-                fillPath?.let {
-                    canvas.nativeCanvas.drawPath(it, Paint().apply {
-                        color = fillColorArgb
-                        style = Paint.Style.FILL
-                        isAntiAlias = true
-                    })
-                }
-                canvas.nativeCanvas.drawPath(outlinePath, Paint().apply {
-                    color = strokeColorArgb
-                    strokeWidth = scale * 0.7f
-                    style = Paint.Style.STROKE
-                    isAntiAlias = true
-                })
-                accentPath?.let {
-                    canvas.nativeCanvas.drawPath(it, Paint().apply {
-                        color = accentColorArgb
-                        style = Paint.Style.FILL
-                        isAntiAlias = true
-                    })
-                }
+                if (baseFillPath != null) canvas.nativeCanvas.drawPath(fillPath, fillPaint)
+                canvas.nativeCanvas.drawPath(outlinePath, strokePaint)
+                if (baseAccentPath != null) canvas.nativeCanvas.drawPath(accentPath, accentPaint)
             }
         },
         contentAlignment = Alignment.Center,
@@ -183,16 +186,24 @@ private fun DrawScope.drawDotTrail(color: Color) {
 }
 
 @Composable
-private fun MotoChargingPreview(modifier: Modifier = Modifier) {
-    val infiniteTransition = rememberInfiniteTransition(label = "moto_progress")
-    val progress by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 100f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2500, easing = LinearEasing)
-        ),
-        label = "progress"
-    )
+private fun MotoChargingPreview(
+    modifier: Modifier = Modifier,
+    animate: Boolean = true,
+) {
+    val progress = if (animate) {
+        val infiniteTransition = rememberInfiniteTransition(label = "moto_progress")
+        val animated by infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 100f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 2500, easing = LinearEasing)
+            ),
+            label = "progress",
+        )
+        animated
+    } else {
+        45f
+    }
 
     val arcColor = Color(0xFF1C6AFF)
     val thinRingColor = Color(0xFF1C6AFF).copy(alpha = 0.35f)
@@ -279,25 +290,33 @@ private val NOTHING_FRAMES = listOf(
 
 
 @Composable
-fun ChargingAnimationBannerPreview(packageName: String, modifier: Modifier = Modifier) {
+fun ChargingAnimationBannerPreview(
+    packageName: String,
+    modifier: Modifier = Modifier,
+    animate: Boolean = true,
+) {
     val style = packageName.substringAfterLast('.')
     if (style == "moto") {
-        MotoChargingPreview(modifier = modifier)
+        MotoChargingPreview(modifier = modifier, animate = animate)
         return
     }
     if (style != "nothing") return
 
     val frameCount = NOTHING_FRAMES.size
-    val infiniteTransition = rememberInfiniteTransition(label = "charging_anim")
-    val animatedIndex by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = frameCount.toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = frameCount * 80, easing = LinearEasing)
-        ),
-        label = "frame_index"
-    )
-    val frameIndex = animatedIndex.toInt().coerceIn(0, frameCount - 1)
+    val frameIndex = if (animate) {
+        val infiniteTransition = rememberInfiniteTransition(label = "charging_anim")
+        val animatedIndex by infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = frameCount.toFloat(),
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = frameCount * 80, easing = LinearEasing)
+            ),
+            label = "frame_index",
+        )
+        animatedIndex.toInt().coerceIn(0, frameCount - 1)
+    } else {
+        frameCount / 2
+    }
 
     Box(
         modifier = modifier.background(Color.Black),
